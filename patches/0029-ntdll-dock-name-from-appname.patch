@@ -1,7 +1,7 @@
 Every program gets its own name in the Dock: its Mac Driver AppName, else its exe name.
 
 macOS labels a Wine program in the Dock after the file it was exec'd as.
-CrossOver's hack 22144 already execs a hard link named after the exe
+The loader's hack 22144 already execs a hard link named after the exe
 ($TMPDIR/winetemp-<loader id>/<name>), but on a build without the preloader
 it only did so when WINEDLLPATH was set, so on this engine every program
 showed as "wine", and the first program was named after the wine binary.

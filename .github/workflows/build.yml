@@ -1,4 +1,4 @@
-# Builds the engine from the pinned CrossOver sources. Manual dispatch only until the first
+# Builds the engine from the pinned Wine source. Manual dispatch only until the first
 # build is green and boots a bottle through Highball; nothing in the app points here yet.
 name: build-engine
 on:
@@ -22,7 +22,7 @@ jobs:
   build:
     # Intel runner on purpose: the Unix side of this tree is x86_64 only (the Mac driver's
     # Metal layer class in d3dmetal_objc.h sits behind #if defined(__x86_64__)), as in
-    # CrossOver's and Sikarugir's own builds. It runs under Rosetta on Apple Silicon.
+    # other Mac Wine builds. It runs under Rosetta on Apple Silicon.
     runs-on: macos-15-intel
     timeout-minutes: 300
     env:
@@ -34,9 +34,9 @@ jobs:
           set -euo pipefail
           url=$(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["url"])')
           sha=$(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["sha256"])')
-          curl -sSL -o crossover-sources.tar.gz "$url"
-          echo "$sha  crossover-sources.tar.gz" | shasum -a 256 -c -
-          mkdir -p src && tar -xzf crossover-sources.tar.gz -C src
+          curl -sSL -o wine-source.tar.gz "$url"
+          echo "$sha  wine-source.tar.gz" | shasum -a 256 -c -
+          mkdir -p src && tar -xzf wine-source.tar.gz -C src
           ls src/sources/wine | head -3
       - name: apply patch series
         run: |
@@ -165,4 +165,4 @@ jobs:
           set -euo pipefail
           f=$(ls cosmos-*.tar.gz engine-*.tar.gz 2>/dev/null | head -1)
           tag="${f%.tar.gz}"
-          gh release create "$tag" "$f" "$f.sha256" --title "$tag" --notes "Wine from the pinned CrossOver source (inputs.json) with the patch series in patches/. Built by run ${{ github.run_id }}. Checksum in the .sha256 file."
+          gh release create "$tag" "$f" "$f.sha256" --title "$tag" --notes "Wine from the pinned source (inputs.json) with the patch series in patches/. Built by run ${{ github.run_id }}. Checksum in the .sha256 file."

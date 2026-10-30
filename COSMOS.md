@@ -8,7 +8,8 @@ Cosmopolitan's own patches, built by `.github/workflows/build.yml` with `cosmos_
 
 - Tarball: `cosmos-<wine version>-r<N>.tar.gz` — Highball's layout (`engine/`, `renderers/`, `frameworks/`, `tools/`) with
   `wswine.bundle -> engine` for Cosmopolitan, and `COSMOS-BUILD.txt` naming the source pin, the patches and the commit.
-- Wine source: CodeWeavers' CrossOver sources (LGPL-2.1-or-later), pinned by SHA-256 in `inputs.json`. The complete
+- Wine source: Wine 11 for macOS (LGPL-2.1-or-later), hosted in the `wine-source-11.0` release and pinned by SHA-256 in
+  `inputs.json`. The complete
   corresponding source of any Cosmos release is that tarball plus the `patches/` folder at the release's commit.
 - Cosmopolitan's patches so far:
   - `0028`: a fault on a thread Wine didn't create ends the program instead of hanging it (also offered upstream as
@@ -19,7 +20,7 @@ Cosmopolitan's own patches, built by `.github/workflows/build.yml` with `cosmos_
     bottle-update window;
   - `0032`: Dock always uses `share/wine/cosmos/exeIcon.icns` first so Cosmo corner alpha is kept (PE icons via
     DrawIconEx were flattening to a sharp black square).
-- Credit: CodeWeavers, Highball (gauthierpiarrette) and everyone named in README.md's "Provenance and credit".
+- Credit: Wine's contributors, Highball (gauthierpiarrette) and everyone named in HIGHBALL.md.
 
 - Look: `cosmos-theme/make-theme.py` recolours Wine's light visual style (every dialog, button, progress bar and scroll
   bar Wine draws itself) to Cosmopolitan's black, greys and off-white, and names it Cosmos. The build runs it after the

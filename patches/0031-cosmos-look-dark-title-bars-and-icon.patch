@@ -7,8 +7,8 @@ Cosmos look: dark title bars, the Cosmos icon in the Dock, Cosmos in the bottle-
 - winemac: every program shows the Cosmos icon in the Dock
   (share/wine/cosmos/exeIcon.icns, found next to winemac.so), the owner's
   choice. Mac Driver option ProgramIcon=y shows the program's own icon
-  instead; a program without one still gets the Cosmos icon (CrossOver's hack
-  13440 only looked for CrossOver.app's exeIcon.icns through CX_ROOT).
+  instead; a program without one still gets the Cosmos icon (the driver's hack
+  13440 only looked for a host app's exeIcon.icns through CX_ROOT).
 - winemac: the icon goes to the Dock at once (setApplicationIconImage). The
   applicationIcon property alone only reached the Dock on the next switch to
   the foreground. Found by Cursor.

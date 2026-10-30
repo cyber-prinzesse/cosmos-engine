@@ -1,7 +1,7 @@
 {
   "wine": {
-    "name": "CrossOver 26.3.0 sources (LGPL)",
-    "url": "https://media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz",
+    "name": "Wine 11 for macOS, source (LGPL)",
+    "url": "https://github.com/cyber-prinzesse/cosmos-engine/releases/download/wine-source-11.0/wine-11.0-macos-source.tar.gz",
     "size": 149054023,
     "sha256": "ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872",
     "subdir": "sources/wine"
