@@ -1,18 +1,46 @@
-Cosmos look: dark title bars, the Cosmos icon when a program has none, Cosmos in the bottle-update window.
+Cosmos look: dark title bars, the Cosmos icon in the Dock, Cosmos in the bottle-update window.
 
 - winemac: Mac Driver option Appearance. By default every Wine window, title
   bar and Mac dialog uses macOS's dark appearance (NSAppearanceNameDarkAqua),
   like Cosmopolitan. "light" forces light, "system" follows macOS. Read with
   the other options before the Cocoa app starts.
-- winemac: a program without an icon of its own showed macOS's generic app
-  icon (CrossOver's hack 13440 only finds CrossOver.app's exeIcon.icns through
-  CX_ROOT). Without CX_ROOT it now takes share/wine/cosmos/exeIcon.icns from
-  the engine, found next to winemac.so.
+- winemac: every program shows the Cosmos icon in the Dock
+  (share/wine/cosmos/exeIcon.icns, found next to winemac.so), the owner's
+  choice. Mac Driver option ProgramIcon=y shows the program's own icon
+  instead; a program without one still gets the Cosmos icon (CrossOver's hack
+  13440 only looked for CrossOver.app's exeIcon.icns through CX_ROOT).
+- winemac: the icon goes to the Dock at once (setApplicationIconImage). The
+  applicationIcon property alone only reached the Dock on the next switch to
+  the foreground. Found by Cursor.
 - wineboot: the window shown while a bottle is created or updated says
   "Cosmos is getting the bottle in ... ready" under the title "Cosmos". Its
   icon is user32's IDI_WINLOGO, which the Cosmos build replaces with the
   Cosmos icon (cosmos-theme/oic_winlogo.ico).
 
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 6b00a1f..ee992db 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1216,6 +1216,8 @@ - (void) setApplicationIconFromCGImageArray:(NSArray*)images
+         }
+ 
+         self.applicationIcon = nsimage;
++        /* Cosmos: the property alone reaches the Dock only on the next transform to foreground; push it now (found by Cursor) */
++        if (nsimage) [NSApp setApplicationIconImage:nsimage];
+     }
+ 
+     - (void) handleCommandTab
+@@ -2907,7 +2909,10 @@ void macdrv_set_application_icon(CFArrayRef images, CFURLRef urlRef)
+         if (imageArray || ![image isValid])
+             [controller setApplicationIconFromCGImageArray:imageArray];
+         else
++        {
+             controller.applicationIcon = image;
++            [NSApp setApplicationIconImage:image];  /* Cosmos: as above, straight to the Dock */
++        }
+     });
+ }
+ 
 diff --git a/dlls/winemac.drv/cocoa_main.m b/dlls/winemac.drv/cocoa_main.m
 index 869b3c7..134423b 100644
 --- a/dlls/winemac.drv/cocoa_main.m
@@ -31,30 +59,32 @@ index 869b3c7..134423b 100644
                                   It can crash if a Wine thread unloads a dylib simultaneously. */
          [[NSUserDefaults standardUserDefaults] registerDefaults:
 diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
-index 12ee0bc..2bf709e 100644
+index 12ee0bc..713e481 100644
 --- a/dlls/winemac.drv/macdrv_cocoa.h
 +++ b/dlls/winemac.drv/macdrv_cocoa.h
-@@ -148,6 +148,7 @@
+@@ -148,6 +148,8 @@
  extern bool retina_on;       /* Whether Retina mode is currently active (enabled and display is in default mode). */
  extern bool enable_app_nap;
  extern bool no_dock_icon;
 +extern int app_appearance;
++extern bool program_icon;
  
  static inline CGRect cgrect_mac_from_win(CGRect rect)
  {
 diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
-index eac788b..c1d5304 100644
+index eac788b..cc381ea 100644
 --- a/dlls/winemac.drv/macdrv_main.c
 +++ b/dlls/winemac.drv/macdrv_main.c
-@@ -61,6 +61,7 @@ int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
+@@ -61,6 +61,8 @@ int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
  bool retina_enabled = false;
  bool enable_app_nap = false;
  bool no_dock_icon = false;
 +int app_appearance = 0; /* Cosmos: 0 dark, 1 light, 2 follow macOS */
++bool program_icon = false; /* Cosmos: show the program's own icon instead of the Cosmos one */
  
  UINT64 app_icon_callback = 0;
  UINT64 app_quit_request_callback = 0;
-@@ -395,6 +396,11 @@ static void setup_options(void)
+@@ -395,6 +397,16 @@ static void setup_options(void)
      if (!get_config_key(hkey, appkey, "NoDockIcon", buffer, sizeof(buffer)))
          no_dock_icon = IS_OPTION_TRUE(buffer[0]);
  
@@ -63,11 +93,16 @@ index eac788b..c1d5304 100644
 +    if (!get_config_key(hkey, appkey, "Appearance", buffer, sizeof(buffer)))
 +        app_appearance = (buffer[0] == 'l' || buffer[0] == 'L') ? 1 : (buffer[0] == 's' || buffer[0] == 'S') ? 2 : 0;
 +
++    /* Cosmos: every program shows the Cosmos icon in the Dock; "y" shows the program's own icon instead.
++     * @@ Wine registry key: HKCU\Software\Wine\Mac Driver, ProgramIcon (also per app under AppDefaults) */
++    if (!get_config_key(hkey, appkey, "ProgramIcon", buffer, sizeof(buffer)))
++        program_icon = IS_OPTION_TRUE(buffer[0]);
++
      /* Don't use appkey.  The DPI and monitor sizes should be consistent for all
         processes in the prefix. */
      if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
 diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
-index b8619f5..6e51b08 100644
+index b8619f5..5c795ff 100644
 --- a/dlls/winemac.drv/window.c
 +++ b/dlls/winemac.drv/window.c
 @@ -27,6 +27,9 @@
@@ -80,30 +115,63 @@ index b8619f5..6e51b08 100644
  #include <IOKit/pwr_mgt/IOPMLib.h>
  #define GetCurrentThread Mac_GetCurrentThread
  #define LoadResource Mac_LoadResource
-@@ -894,6 +897,27 @@ static void set_app_icon(void)
+@@ -846,12 +849,47 @@ void activate_on_following_focus(void)
+ }
+ 
+ 
++/***********************************************************************
++ *              cosmos_icon_url
++ *
++ * Cosmos: the engine's own icon, share/wine/cosmos/exeIcon.icns (winemac.so is in lib/wine/<arch>-unix). NULL when absent.
++ */
++static CFURLRef cosmos_icon_url(void)
++{
++    Dl_info info;
++    char *path, *p;
++    CFURLRef url = NULL;
++
++    if (!dladdr(cosmos_icon_url, &info) || !info.dli_fname ||
++        !(path = malloc(strlen(info.dli_fname) + sizeof("/../../../share/wine/cosmos/exeIcon.icns"))))
++        return NULL;
++    strcpy(path, info.dli_fname);
++    if ((p = strrchr(path, '/'))) *p = 0;
++    strcat(path, "/../../../share/wine/cosmos/exeIcon.icns");
++    if (!access(path, R_OK))
++        url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)path, strlen(path), FALSE);
++    free(path);
++    return url;
++}
++
++
+ /***********************************************************************
+  *              set_app_icon
+  */
+ static void set_app_icon(void)
+ {
+-    CFArrayRef images = create_app_icon_images();
++    CFArrayRef images;
++    CFURLRef url;
++
++    /* Cosmos: every program shows the Cosmos icon in the Dock, unless Mac Driver "ProgramIcon" asks for its own. */
++    if (!program_icon && (url = cosmos_icon_url()))
++    {
++        macdrv_set_application_icon(NULL, url);
++        CFRelease(url);
++        return;
++    }
++
++    images = create_app_icon_images();
+     if (images)
+     {
+         macdrv_set_application_icon(images, NULL);
+@@ -894,6 +932,11 @@ static void set_app_icon(void)
                  CFRelease(url);
              }
          }
-+        else /* Cosmos: the engine's own icon, share/wine/cosmos/exeIcon.icns (winemac.so is in lib/wine/<arch>-unix) */
++        else if ((url = cosmos_icon_url())) /* Cosmos: a program without an icon of its own */
 +        {
-+            Dl_info info;
-+            char *path, *p;
-+            CFURLRef url;
-+
-+            if (dladdr(set_app_icon, &info) && info.dli_fname &&
-+                (path = malloc(strlen(info.dli_fname) + sizeof("/../../../share/wine/cosmos/exeIcon.icns"))))
-+            {
-+                strcpy(path, info.dli_fname);
-+                if ((p = strrchr(path, '/'))) *p = 0;
-+                strcat(path, "/../../../share/wine/cosmos/exeIcon.icns");
-+                if (!access(path, R_OK) &&
-+                    (url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)path, strlen(path), FALSE)))
-+                {
-+                    macdrv_set_application_icon(NULL, url);
-+                    CFRelease(url);
-+                }
-+                free(path);
-+            }
++            macdrv_set_application_icon(NULL, url);
++            CFRelease(url);
 +        }
      }
  }
