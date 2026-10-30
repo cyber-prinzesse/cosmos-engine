@@ -20,11 +20,51 @@ Now:
 
 No AppName and no WINEMACAPPNAME: the exe name, as hack 22144 intended.
 
+Two fixes to hack 22144 itself, found by testing (dock_label_child):
+- the named file is an APFS clone, not a hard link. Hard links are one file
+  under many names, and macOS reports a running program's path as whichever
+  of those names it looked up last: every program showed the same, wrong
+  name (a notepad started by HostApp came out as "explorer.exe"). A clone is
+  a file of its own, takes no extra space, and keeps its name. Hard link and
+  symlink stay as fallbacks.
+- extract_exe_name computed the name without its extension but returned the
+  whole string, so programs showed "explorer.exe" instead of "explorer".
+
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 1b3f4830..27abd885 100644
+index 1b3f483..d681219 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -654,9 +654,37 @@ fail:
+@@ -69,6 +69,7 @@
+ # include <mach/mach.h>
+ # include <mach/mach_error.h>
+ # include <mach-o/getsect.h>
++# include <sys/clonefile.h>
+ # include <servers/bootstrap.h>
+ # include <libkern/OSCacheControl.h>
+ # include "coop_proto.h"
+@@ -577,7 +578,7 @@ static char *extract_exe_name(const char *exe_path)
+         exe_name_len = strlen(exe_name);
+ 
+     if (exe_name_len)
+-        ret = strdup(exe_name);
++        ret = strndup(exe_name, exe_name_len);  /* Cosmos: without the extension, as computed above */
+     else
+         ret = NULL;
+ 
+@@ -645,8 +646,11 @@ static char *create_preloader_link(const char *wineloader_path, const char *exe_
+ 
+     /* Try a hard link first, to avoid the little "alias" arrow that the Dock puts on the icon.
+      * But if that fails, fall back to a symlink.
++     * Cosmos: an APFS clone before either. Hard links are one file under many names, and macOS reports a running
++     * program's path as whichever of those names it looked up last, so every program got one shared, wrong Dock name.
++     * A clone is a file of its own (no extra disk space) and keeps its name.
+      */
+-    if (!link(wineloader_path, linkpath) || !symlink(wineloader_path, linkpath))
++    if (!clonefile(wineloader_path, linkpath, 0) || !link(wineloader_path, linkpath) || !symlink(wineloader_path, linkpath))
+         return linkpath;
+ 
+ fail:
+@@ -654,9 +658,37 @@ fail:
      return NULL;
  }
  
@@ -63,7 +103,7 @@ index 1b3f4830..27abd885 100644
      if (app_name)
      {
          char *preloader_path = create_preloader_link(*wineloader_path, app_name);
-@@ -724,9 +752,15 @@ static void preloader_exec( char **argv, const char *image_path, WORD machine )
+@@ -724,9 +756,15 @@ static void preloader_exec( char **argv, const char *image_path, WORD machine )
       * which will show up as the icon name in the Dock.
       * When the preloader is not being used, WINEDLLPATH needs to be set correctly for
       * the loader to find ntdll.so, so don't even attempt this unless WINEDLLPATH is set.
@@ -82,7 +122,7 @@ index 1b3f4830..27abd885 100644
  
      /* CW HACK: if ROSETTA_X87_PATH is set, re-exec via rosettax87 so its x87 JIT
 diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
-index 86f89347..32241d3a 100644
+index 86f8934..32241d3 100644
 --- a/dlls/ntdll/unix/process.c
 +++ b/dlls/ntdll/unix/process.c
 @@ -870,6 +870,62 @@ static BOOL is_unix_console_handle( HANDLE handle )
