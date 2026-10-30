@@ -17,4 +17,8 @@ Cosmopolitan's own patches, built by `.github/workflows/build.yml` with `cosmos_
   - `0030`: Mac Driver `NoDockIcon`, so Steam shows one Dock icon.
 - Credit: CodeWeavers, Highball (gauthierpiarrette) and everyone named in README.md's "Provenance and credit".
 
+- Look: `cosmos-theme/make-theme.py` recolours Wine's light visual style (every dialog, button, progress bar and scroll
+  bar Wine draws itself) to Cosmopolitan's black, greys and off-white, and names it Cosmos. The build runs it after the
+  patches; `cosmos-theme/convert` lets Wine's `tools/buildimage` use ImageMagick 7.
+
 Keeping up with Highball: merge `upstream/main` into `cosmos`, rebuild, bump the revision.

@@ -50,6 +50,14 @@ jobs:
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           x86_64-w64-mingw32-gcc --version | head -1
           i686-w64-mingw32-gcc --version | head -1
+      # Cosmos: Wine's light visual style recoloured to Cosmopolitan's black (cosmos-theme/make-theme.py), bitmaps rebuilt
+      # from the recoloured SVGs with Wine's own tools/buildimage. Highball builds (no cosmos_revision) keep the light style.
+      - name: cosmos theme
+        if: ${{ github.event.inputs.cosmos_revision != '' }}
+        run: |
+          set -euo pipefail
+          brew install -q librsvg imagemagick || true
+          python3 cosmos-theme/make-theme.py src/sources/wine
       - name: ccache
         uses: actions/cache@v4
         with:
@@ -126,7 +134,8 @@ jobs:
             ln -s engine out/wswine.bundle
             { echo "Cosmos engine r$rev, built by run ${{ github.run_id }} from ${{ github.repository }}@${{ github.sha }}"
               echo "Wine: $(out/engine/bin/wine --version) from $(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["url"])')"
-              echo "Patches:"; ls patches/*.patch | sed 's|^patches/|  |'; } > out/COSMOS-BUILD.txt
+              echo "Patches:"; ls patches/*.patch | sed 's|^patches/|  |'
+              echo "Theme: Cosmos (cosmos-theme/make-theme.py)"; } > out/COSMOS-BUILD.txt
             name="cosmos-$(out/engine/bin/wine --version | sed 's/^wine-//; s/ .*//')-r$rev"
           fi
           tar -C out -czf "${name}.tar.gz" .

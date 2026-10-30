@@ -1,0 +1,6 @@
+#!/bin/sh
+# ImageMagick for Wine's tools/buildimage: IMv7 dropped "+matte", which buildimage uses for bitmaps without transparency
+# (they must come out 24-bit like Wine's committed ones). Translated to "-alpha off"; IMv6 "convert" when there is no magick.
+for a in "$@"; do shift; [ "$a" = "+matte" ] && set -- "$@" -alpha off || set -- "$@" "$a"; done
+command -v magick >/dev/null 2>&1 && exec magick "$@"
+exec convert "$@"
