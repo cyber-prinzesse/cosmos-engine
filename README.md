@@ -1,3 +1,14 @@
+<img src="cosmos-icon.jpg" alt="Cosmos" width="360">
+
+# Cosmos
+
+**Cosmos is the Wine engine of [Cosmopolitan](https://github.com/cyber-prinzesse/Cosmopolitan). It is based on Wine**
+(CodeWeavers' CrossOver sources, LGPL-2.1-or-later), built from Highball's recipe and patch series below, plus
+Cosmopolitan's own patches. How it is built and named: [COSMOS.md](COSMOS.md). Everything after this section is
+Highball's README, kept as it is.
+
+---
+
 # highball-engine
 
 The Wine engine build for [Highball](https://github.com/gauthierpiarrette/highball), as a
