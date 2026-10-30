@@ -58,6 +58,8 @@ jobs:
           set -euo pipefail
           brew install -q librsvg imagemagick || true
           python3 cosmos-theme/make-theme.py src/sources/wine
+          # the Cosmos icon in place of Wine's logo (IDI_WINLOGO: the bottle-update window, Wine's own programs)
+          cp cosmos-theme/oic_winlogo.ico src/sources/wine/dlls/user32/resources/oic_winlogo.ico
       - name: ccache
         uses: actions/cache@v4
         with:
@@ -132,6 +134,8 @@ jobs:
             # Cosmos (Cosmopolitan's engine): its app reads engines/<name>/wswine.bundle/{bin,lib,share}, so the engine folder gets that alias,
             # and the build records what went in (source pin, patch list, commit) next to it.
             ln -s engine out/wswine.bundle
+            # the Dock icon of a program without one of its own (patch 0031)
+            mkdir -p out/engine/share/wine/cosmos && cp cosmos-theme/exeIcon.icns out/engine/share/wine/cosmos/exeIcon.icns
             { echo "Cosmos engine r$rev, built by run ${{ github.run_id }} from ${{ github.repository }}@${{ github.sha }}"
               echo "Wine: $(out/engine/bin/wine --version) from $(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["url"])')"
               echo "Patches:"; ls patches/*.patch | sed 's|^patches/|  |'

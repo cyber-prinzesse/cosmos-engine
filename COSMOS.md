@@ -14,11 +14,13 @@ Cosmopolitan's own patches, built by `.github/workflows/build.yml` with `cosmos_
   - `0028`: a fault on a thread Wine didn't create ends the program instead of hanging it (also offered upstream as
     highball-engine PR #24);
   - `0029`: every program gets its own Dock name, from its Mac Driver `AppName` or its exe name;
-  - `0030`: Mac Driver `NoDockIcon`, so Steam shows one Dock icon.
+  - `0030`: Mac Driver `NoDockIcon`, so Steam shows one Dock icon;
+  - `0031`: dark title bars (Mac Driver `Appearance`), the Cosmos icon for programs without one, Cosmos in the
+    bottle-update window.
 - Credit: CodeWeavers, Highball (gauthierpiarrette) and everyone named in README.md's "Provenance and credit".
 
 - Look: `cosmos-theme/make-theme.py` recolours Wine's light visual style (every dialog, button, progress bar and scroll
   bar Wine draws itself) to Cosmopolitan's black, greys and off-white, and names it Cosmos. The build runs it after the
-  patches; `cosmos-theme/convert` lets Wine's `tools/buildimage` use ImageMagick 7.
+  patches, puts the Cosmos icon in place of Wine's logo and ships `exeIcon.icns`; `cosmos-theme/convert` lets Wine's `tools/buildimage` use ImageMagick 7.
 
 Keeping up with Highball: merge `upstream/main` into `cosmos`, rebuild, bump the revision.
