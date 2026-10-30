@@ -46,7 +46,7 @@ jobs:
       - name: toolchain
         run: |
           set -euo pipefail
-          brew install -q mingw-w64 bison pkg-config ccache gnutls freetype sdl2 libpng jpeg-turbo gstreamer molten-vk || true
+          brew install -q mingw-w64 bison pkg-config ccache gnutls freetype sdl2 sdl3 libpng jpeg-turbo gstreamer molten-vk || true
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           x86_64-w64-mingw32-gcc --version | head -1
           i686-w64-mingw32-gcc --version | head -1
@@ -58,8 +58,8 @@ jobs:
           set -euo pipefail
           brew install -q librsvg imagemagick || true
           python3 cosmos-theme/make-theme.py src/sources/wine
-          # the Cosmos icon in place of Wine's logo (IDI_WINLOGO: the bottle-update window, Wine's own programs)
-          cp cosmos-theme/oic_winlogo.ico src/sources/wine/dlls/user32/resources/oic_winlogo.ico
+          # Cosmos icon in place of every Wine-branded .ico (IDI_WINLOGO, winecfg, winefile, winetest)
+          zsh cosmos-theme/install-icons.sh src/sources/wine
       - name: ccache
         uses: actions/cache@v4
         with:
@@ -134,6 +134,9 @@ jobs:
             # Cosmos (Cosmopolitan's engine): its app reads engines/<name>/wswine.bundle/{bin,lib,share}, so the engine folder gets that alias,
             # and the build records what went in (source pin, patch list, commit) next to it.
             ln -s engine out/wswine.bundle
+            # the host libraries Wine opens by name (FreeType, GnuTLS, SDL, MoltenVK and what they link to), so the engine
+            # needs nothing from Homebrew or from Cosmopolitan's Sikarugir template at run time
+            python3 cosmos-tools/bundle-hostlibs.py out/engine build
             # the Dock icon of a program without one of its own (patch 0031)
             mkdir -p out/engine/share/wine/cosmos && cp cosmos-theme/exeIcon.icns out/engine/share/wine/cosmos/exeIcon.icns
             { echo "Cosmos engine r$rev, built by run ${{ github.run_id }} from ${{ github.repository }}@${{ github.sha }}"

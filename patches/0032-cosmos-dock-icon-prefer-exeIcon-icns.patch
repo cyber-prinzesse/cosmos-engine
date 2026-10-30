@@ -1,0 +1,149 @@
+Cosmos Dock icon: always load share/wine/cosmos/exeIcon.icns first.
+
+PE icons via DrawIconEx often flatten alpha onto opaque black, so Cosmo's
+transparent corners become a sharp square in the Dock. The ICNS path keeps
+alpha. Also push NSApp setApplicationIconImage when setting from ICNS/PE.
+
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 6b00a1f..2ed5514 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1216,6 +1216,8 @@ - (void) setApplicationIconFromCGImageArray:(NSArray*)images
+         }
+ 
+         self.applicationIcon = nsimage;
++        /* Cosmos: synthesized applicationIcon does not push to the Dock by itself. */
++        if (nsimage) [NSApp setApplicationIconImage:nsimage];
+     }
+ 
+     - (void) handleCommandTab
+@@ -2907,7 +2909,11 @@ void macdrv_set_application_icon(CFArrayRef images, CFURLRef urlRef)
+         if (imageArray || ![image isValid])
+             [controller setApplicationIconFromCGImageArray:imageArray];
+         else
++        {
+             controller.applicationIcon = image;
++            /* Cosmos: push ICNS (corner alpha intact) to the Dock immediately. */
++            if (image) [NSApp setApplicationIconImage:image];
++        }
+     });
+ }
+ 
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index 6e51b08..13c2650 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -28,6 +28,8 @@
+ #include "config.h"
+ 
+ #include <dlfcn.h>
++#include <stdio.h>
++#include <time.h>
+ #include <unistd.h>
+ 
+ #include <IOKit/pwr_mgt/IOPMLib.h>
+@@ -851,21 +853,73 @@ void activate_on_following_focus(void)
+ 
+ /***********************************************************************
+  *              set_app_icon
++ *
++ * Cosmos: prefer share/wine/cosmos/exeIcon.icns for every program. Loading
++ * the ICNS keeps corner alpha; create_app_icon_images() → DrawIconEx often
++ * flattens PE icons onto opaque black, so the Dock shows a sharp square.
+  */
+ static void set_app_icon(void)
+ {
+-    CFArrayRef images = create_app_icon_images();
++    Dl_info info;
++    char *path, *p;
++    CFURLRef url;
++    CFArrayRef images;
++
++    /* #region agent log */
++    {
++        const char *logpath = "/Users/cyber_prinzesse/.cursor/debug-c5be43.log";
++        FILE *lf = fopen(logpath, "a");
++        if (lf)
++        {
++            fprintf(lf, "{\"sessionId\":\"c5be43\",\"runId\":\"icon-icns-first\",\"hypothesisId\":\"H6\",\"location\":\"window.c:set_app_icon\",\"message\":\"set_app_icon enter\",\"timestamp\":%lld}\n",
++                    (long long)(time(NULL) * 1000LL));
++            fclose(lf);
++        }
++    }
++    /* #endregion */
++
++    if (dladdr(set_app_icon, &info) && info.dli_fname &&
++        (path = malloc(strlen(info.dli_fname) + sizeof("/../../../share/wine/cosmos/exeIcon.icns"))))
++    {
++        strcpy(path, info.dli_fname);
++        if ((p = strrchr(path, '/'))) *p = 0;
++        strcat(path, "/../../../share/wine/cosmos/exeIcon.icns");
++        if (!access(path, R_OK) &&
++            (url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)path, strlen(path), FALSE)))
++        {
++            /* #region agent log */
++            {
++                FILE *lf = fopen("/Users/cyber_prinzesse/.cursor/debug-c5be43.log", "a");
++                if (lf)
++                {
++                    fprintf(lf, "{\"sessionId\":\"c5be43\",\"runId\":\"icon-icns-first\",\"hypothesisId\":\"H6\",\"location\":\"window.c:set_app_icon\",\"message\":\"using cosmos exeIcon.icns\",\"data\":{\"path\":\"%s\"},\"timestamp\":%lld}\n",
++                            path, (long long)(time(NULL) * 1000LL));
++                    fclose(lf);
++                }
++            }
++            /* #endregion */
++            macdrv_set_application_icon(NULL, url);
++            CFRelease(url);
++            free(path);
++            return;
++        }
++        free(path);
++    }
++
++    images = create_app_icon_images();
+     if (images)
+     {
+         macdrv_set_application_icon(images, NULL);
+         CFRelease(images);
++        return;
+     }
+-    else /* CrossOver Hack 13440: Find an icon from the CrossOver app bundle */
++
++    /* CrossOver Hack 13440: Find an icon from the CrossOver app bundle */
+     {
+         const char *cx_root;
+         if ((cx_root = getenv("CX_ROOT")) && cx_root[0])
+         {
+-            CFURLRef url, temp;
++            CFURLRef temp;
+             url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)cx_root, strlen(cx_root), TRUE);
+             if (url)
+             {
+@@ -897,27 +951,6 @@ static void set_app_icon(void)
+                 CFRelease(url);
+             }
+         }
+-        else /* Cosmos: the engine's own icon, share/wine/cosmos/exeIcon.icns (winemac.so is in lib/wine/<arch>-unix) */
+-        {
+-            Dl_info info;
+-            char *path, *p;
+-            CFURLRef url;
+-
+-            if (dladdr(set_app_icon, &info) && info.dli_fname &&
+-                (path = malloc(strlen(info.dli_fname) + sizeof("/../../../share/wine/cosmos/exeIcon.icns"))))
+-            {
+-                strcpy(path, info.dli_fname);
+-                if ((p = strrchr(path, '/'))) *p = 0;
+-                strcat(path, "/../../../share/wine/cosmos/exeIcon.icns");
+-                if (!access(path, R_OK) &&
+-                    (url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)path, strlen(path), FALSE)))
+-                {
+-                    macdrv_set_application_icon(NULL, url);
+-                    CFRelease(url);
+-                }
+-                free(path);
+-            }
+-        }
+     }
+ }
+ 
