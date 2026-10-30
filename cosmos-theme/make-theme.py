@@ -113,12 +113,14 @@ def main():
         return
     env = dict(os.environ)
     env.setdefault("CONVERT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "convert"))
+    # buildimage needs XML::LibXML: macOS's own perl has it, Homebrew's (first in PATH on GitHub's runners) doesn't
+    perl = "/usr/bin/perl" if os.path.exists("/usr/bin/perl") else "perl"
     built = 0
     for f in svgs:
         bmp = os.path.join(d, f[:-4] + ".bmp")
         if not os.path.exists(bmp):
             continue  # only the bitmaps Wine commits; others are built from SVG by the build itself
-        subprocess.run(["perl", os.path.join(wine, "tools", "buildimage"), os.path.join(d, f), bmp], check=True, env=env)
+        subprocess.run([perl, os.path.join(wine, "tools", "buildimage"), os.path.join(d, f), bmp], check=True, env=env)
         built += 1
     print("cosmos theme: %d bitmaps rebuilt" % built)
 
