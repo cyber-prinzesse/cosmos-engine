@@ -18,8 +18,8 @@ Cosmopolitan's own patches, built by `.github/workflows/build.yml` with `cosmos_
   - `0030`: Mac Driver `NoDockIcon`, so Steam shows one Dock icon;
   - `0031`: dark title bars (Mac Driver `Appearance`), the Cosmos icon for programs without one, Cosmos in the
     bottle-update window;
-  - `0032`: Dock always uses `share/wine/cosmos/exeIcon.icns` first so Cosmo corner alpha is kept (PE icons via
-    DrawIconEx were flattening to a sharp black square).
+  - `0032`: Mac Driver `QuitRuns`, so a Mac Quit of Steam's Dock icon quits all of Steam instead of only its web
+    helper (which Steam restarted at once);
 - Credit: Wine's contributors, Highball (gauthierpiarrette) and everyone named in HIGHBALL.md.
 
 - Look: `cosmos-theme/make-theme.py` recolours Wine's light visual style (every dialog, button, progress bar and scroll

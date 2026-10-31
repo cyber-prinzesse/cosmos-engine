@@ -143,6 +143,8 @@ jobs:
               echo "Wine: $(out/engine/bin/wine --version) from $(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["url"])')"
               echo "Patches:"; ls patches/*.patch | sed 's|^patches/|  |'
               echo "Theme: Cosmos (cosmos-theme/make-theme.py)"; } > out/COSMOS-BUILD.txt
+            # the licence (LGPL) and the notices travel inside the tarball, not only beside it on the release page
+            cp LICENSE NOTICE.md out/
             name="cosmos-$(out/engine/bin/wine --version | sed 's/^wine-//; s/ .*//')-r$rev"
           fi
           tar -C out -czf "${name}.tar.gz" .
@@ -165,4 +167,4 @@ jobs:
           set -euo pipefail
           f=$(ls cosmos-*.tar.gz engine-*.tar.gz 2>/dev/null | head -1)
           tag="${f%.tar.gz}"
-          gh release create "$tag" "$f" "$f.sha256" --title "$tag" --notes "Wine from the pinned source (inputs.json) with the patch series in patches/. Built by run ${{ github.run_id }}. Checksum in the .sha256 file."
+          gh release create "$tag" "$f" "$f.sha256" LICENSE NOTICE.md --title "$tag" --notes "Wine from the pinned source (inputs.json) with the patch series in patches/. Built by run ${{ github.run_id }}. Checksum in the .sha256 file."
