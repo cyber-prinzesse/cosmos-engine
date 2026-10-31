@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:07 +0100
+Subject: [PATCH 22/29] 0028-ntdll-crash-on-faults-in-foreign-threads
+
+---
+ dlls/ntdll/unix/signal_x86_64.c | 35 +++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index 628e7842..5e2c2583 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2352,6 +2352,32 @@ static inline BOOL check_invalid_gsbase( struct thread_data *data, ucontext_t *u
+ }
+ 
+ 
++#ifdef __APPLE__
++/**********************************************************************
++ *		foreign_thread_fault
++ *
++ * A fault on a thread Wine didn't create, which has no TEB: Apple's libdispatch workers running
++ * Metal and D3DMetal code are such threads. The handlers below read the TEB right away, fault
++ * again and re-enter themselves forever, so the program hangs at 100% CPU instead of crashing.
++ * Put the signal back to its default action instead: a fault happens again when the faulting
++ * instruction is retried (a trap, which isn't retried, is raised again), and the process crashes
++ * with a crash report that names the real fault.
++ */
++static BOOL foreign_thread_fault( int sig, BOOL retried )
++{
++    struct sigaction sa;
++
++    if (NtCurrentTeb()) return FALSE;
++    memset( &sa, 0, sizeof(sa) );
++    sa.sa_handler = SIG_DFL;
++    sigemptyset( &sa.sa_mask );
++    sigaction( sig, &sa, NULL );
++    if (!retried) raise( sig );  /* blocked while this handler runs: delivered when it returns */
++    return TRUE;
++}
++#endif
++
++
+ /**********************************************************************
+  *		segv_handler
+  *
+@@ -2360,6 +2386,9 @@ static inline BOOL check_invalid_gsbase( struct thread_data *data, ucontext_t *u
+ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+ {
+     ucontext_t *sigcontext = _sigcontext;
++#ifdef __APPLE__
++    if (foreign_thread_fault( signal, TRUE )) return;  /* before init_handler: no Wine thread data here */
++#endif
+     struct thread_data *data = init_handler( sigcontext );
+     struct xcontext context;
+     EXCEPTION_RECORD rec = { .ExceptionAddress = (void *)RIP_sig(sigcontext) };
+@@ -2457,6 +2486,9 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+ static void trap_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+ {
+     ucontext_t *sigcontext = _sigcontext;
++#ifdef __APPLE__
++    if (foreign_thread_fault( signal, FALSE )) return;  /* before init_handler: no Wine thread data here */
++#endif
+     struct thread_data *data = init_handler( sigcontext );
+     struct xcontext context;
+     EXCEPTION_RECORD rec = { .ExceptionAddress = (void *)RIP_sig(sigcontext) };
+@@ -2504,6 +2536,9 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+ static void fpe_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+ {
+     ucontext_t *sigcontext = _sigcontext;
++#ifdef __APPLE__
++    if (foreign_thread_fault( signal, TRUE )) return;  /* before init_handler: no Wine thread data here */
++#endif
+     struct thread_data *data = init_handler( sigcontext );
+     struct xcontext context;
+     EXCEPTION_RECORD rec = { .ExceptionAddress = (void *)RIP_sig(sigcontext) };

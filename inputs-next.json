@@ -1,0 +1,20 @@
+{
+  "wine": {
+    "name": "Wine 11.21 for macOS, source (LGPL)",
+    "url": "https://github.com/cyber-prinzesse/cosmos-engine/releases/download/wine-source-11.21/wine-11.21-macos-source.tar.gz",
+    "size": 74751435,
+    "sha256": "10244e18754515345c90ab9e4a2a819243776a92ff8f14bf1d093ef0d3a04e2a",
+    "subdir": "sources/wine"
+  },
+  "moltenvk": {
+    "name": "MoltenVK 1.4.2",
+    "url": "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-macos.tar",
+    "sha256": null,
+    "note": "pin the sha before the first real build; Highball may substitute its own patched build as a component"
+  },
+  "toolchain": {
+    "runner": "macos-15-intel",
+    "mingw": "mingw-w64 (gcc) via Homebrew; llvm-mingw is known to break Steam's login (frankea, 2026-08-04)",
+    "hostArch": "x86_64"
+  }
+}

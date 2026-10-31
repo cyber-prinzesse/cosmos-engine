@@ -1,0 +1,191 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:08 +0100
+Subject: [PATCH 25/29] 0031-cosmos-look-dark-title-bars-and-icon
+
+---
+ dlls/winemac.drv/cocoa_app.m    |  5 ++++
+ dlls/winemac.drv/cocoa_main.m   |  6 +++++
+ dlls/winemac.drv/macdrv_cocoa.h |  2 ++
+ dlls/winemac.drv/macdrv_main.c  | 12 +++++++++
+ dlls/winemac.drv/window.c       | 45 ++++++++++++++++++++++++++++++++-
+ programs/wineboot/wineboot.rc   |  4 +--
+ 6 files changed, 71 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index fbff6ae4..7963d398 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1217,6 +1217,8 @@ - (void) setApplicationIconFromCGImageArray:(NSArray*)images
+         }
+ 
+         self.applicationIcon = nsimage;
++        /* Cosmos: the property alone reaches the Dock only on the next transform to foreground; push it now (found by Cursor) */
++        if (nsimage) [NSApp setApplicationIconImage:nsimage];
+     }
+ 
+     - (void) handleCommandTab
+@@ -2914,7 +2916,10 @@ void macdrv_set_application_icon(CFArrayRef images, CFURLRef urlRef)
+         if (imageArray || ![image isValid])
+             [controller setApplicationIconFromCGImageArray:imageArray];
+         else
++        {
+             controller.applicationIcon = image;
++            [NSApp setApplicationIconImage:image];  /* Cosmos: as above, straight to the Dock */
++        }
+     });
+ }
+ 
+diff --git a/dlls/winemac.drv/cocoa_main.m b/dlls/winemac.drv/cocoa_main.m
+index f6899297..3ba1e187 100644
+--- a/dlls/winemac.drv/cocoa_main.m
++++ b/dlls/winemac.drv/cocoa_main.m
+@@ -76,6 +76,12 @@ static void run_cocoa_app(void* info)
+             created_app = TRUE;
+         }
+ 
++        /* Cosmos: dark title bars and Mac dialogs (Mac Driver "Appearance"; see setup_options) */
++        if (app_appearance == 0)
++            [NSApp setAppearance:[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]];
++        else if (app_appearance == 1)
++            [NSApp setAppearance:[NSAppearance appearanceNamed:NSAppearanceNameAqua]];
++
+         /* CrossOver hack 12205: Prevent call to NSVersionOfRunTimeLibrary() during app startup.
+                                  It can crash if a Wine thread unloads a dylib simultaneously. */
+         [[NSUserDefaults standardUserDefaults] registerDefaults:
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+index a6ecd631..6cea1575 100644
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -143,6 +143,8 @@
+ extern bool retina_on;       /* Whether Retina mode is currently active (enabled and display is in default mode). */
+ extern bool enable_app_nap;
+ extern bool no_dock_icon;
++extern int app_appearance;
++extern bool program_icon;
+ 
+ static inline CGRect cgrect_mac_from_win(CGRect rect)
+ {
+diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
+index 410cb280..d9995cc0 100644
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -56,6 +56,8 @@ int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
+ bool retina_enabled = false;
+ bool enable_app_nap = false;
+ bool no_dock_icon = false;
++int app_appearance = 0; /* Cosmos: 0 dark, 1 light, 2 follow macOS */
++bool program_icon = false; /* Cosmos: show the program's own icon instead of the Cosmos one */
+ 
+ pthread_key_t macdrv_thread_data_key = 0;
+ UINT64 app_icon_callback = 0;
+@@ -384,6 +386,16 @@ static void setup_options(void)
+     if (!get_config_key(hkey, appkey, "NoDockIcon", buffer, sizeof(buffer)))
+         no_dock_icon = IS_OPTION_TRUE(buffer[0]);
+ 
++    /* Cosmos: title bars and Mac dialogs are dark, like Cosmopolitan, unless "light" or "system" (follow macOS).
++     * @@ Wine registry key: HKCU\Software\Wine\Mac Driver, Appearance (also per app under AppDefaults) */
++    if (!get_config_key(hkey, appkey, "Appearance", buffer, sizeof(buffer)))
++        app_appearance = (buffer[0] == 'l' || buffer[0] == 'L') ? 1 : (buffer[0] == 's' || buffer[0] == 'S') ? 2 : 0;
++
++    /* Cosmos: every program shows the Cosmos icon in the Dock; "y" shows the program's own icon instead.
++     * @@ Wine registry key: HKCU\Software\Wine\Mac Driver, ProgramIcon (also per app under AppDefaults) */
++    if (!get_config_key(hkey, appkey, "ProgramIcon", buffer, sizeof(buffer)))
++        program_icon = IS_OPTION_TRUE(buffer[0]);
++
+     /* Don't use appkey.  The DPI and monitor sizes should be consistent for all
+        processes in the prefix. */
+     if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index 9dfe02b5..4e8504e6 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -28,6 +28,9 @@
+ #include "config.h"
+ #include "macdrv.h"
+ 
++#include <dlfcn.h>
++#include <unistd.h>
++
+ #include <IOKit/pwr_mgt/IOPMLib.h>
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
+@@ -839,12 +842,47 @@ void activate_on_following_focus(void)
+ }
+ 
+ 
++/***********************************************************************
++ *              cosmos_icon_url
++ *
++ * Cosmos: the engine's own icon, share/wine/cosmos/exeIcon.icns (winemac.so is in lib/wine/<arch>-unix). NULL when absent.
++ */
++static CFURLRef cosmos_icon_url(void)
++{
++    Dl_info info;
++    char *path, *p;
++    CFURLRef url = NULL;
++
++    if (!dladdr(cosmos_icon_url, &info) || !info.dli_fname ||
++        !(path = malloc(strlen(info.dli_fname) + sizeof("/../../../share/wine/cosmos/exeIcon.icns"))))
++        return NULL;
++    strcpy(path, info.dli_fname);
++    if ((p = strrchr(path, '/'))) *p = 0;
++    strcat(path, "/../../../share/wine/cosmos/exeIcon.icns");
++    if (!access(path, R_OK))
++        url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)path, strlen(path), FALSE);
++    free(path);
++    return url;
++}
++
++
+ /***********************************************************************
+  *              set_app_icon
+  */
+ static void set_app_icon(void)
+ {
+-    CFArrayRef images = create_app_icon_images();
++    CFArrayRef images;
++    CFURLRef url;
++
++    /* Cosmos: every program shows the Cosmos icon in the Dock, unless Mac Driver "ProgramIcon" asks for its own. */
++    if (!program_icon && (url = cosmos_icon_url()))
++    {
++        macdrv_set_application_icon(NULL, url);
++        CFRelease(url);
++        return;
++    }
++
++    images = create_app_icon_images();
+     if (images)
+     {
+         macdrv_set_application_icon(images, NULL);
+@@ -887,6 +925,11 @@ static void set_app_icon(void)
+                 CFRelease(url);
+             }
+         }
++        else if ((url = cosmos_icon_url())) /* Cosmos: a program without an icon of its own */
++        {
++            macdrv_set_application_icon(NULL, url);
++            CFRelease(url);
++        }
+     }
+ }
+ 
+diff --git a/programs/wineboot/wineboot.rc b/programs/wineboot/wineboot.rc
+index 1b70c1fc..894eff8b 100644
+--- a/programs/wineboot/wineboot.rc
++++ b/programs/wineboot/wineboot.rc
+@@ -38,11 +38,11 @@ END
+ 
+ IDD_WAITDLG DIALOG 0, 0, 200, 50
+ STYLE DS_MODALFRAME | DS_NOIDLEMSG | DS_CENTER | WS_POPUP | WS_DISABLED
+-CAPTION "Wine"
++CAPTION "Cosmos"
+ FONT 8, "MS Shell Dlg"
+ BEGIN
+     ICON "", IDC_WAITICON, 3, 3, 32, 32
+-    LTEXT "The Wine configuration in %s is being updated, please wait...",
++    LTEXT "Cosmos is getting the bottle in %s ready, please wait...",
+           IDC_WAITTEXT, 40, 5, 150, 40, SS_NOPREFIX | SS_EDITCONTROL
+ END
+ 

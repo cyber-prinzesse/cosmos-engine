@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:07 +0100
+Subject: [PATCH 24/29] 0030-winemac-no-dock-icon-option
+
+---
+ dlls/winemac.drv/cocoa_app.m    | 11 +++++++++++
+ dlls/winemac.drv/macdrv_cocoa.h |  1 +
+ dlls/winemac.drv/macdrv_main.c  |  6 ++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 679f217a..fbff6ae4 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -295,6 +295,17 @@ - (void) changeEditMenuKeyEquivalentsForWindow:(NSWindow*)window
+ 
+     - (void) transformProcessToForeground:(BOOL)activateIfTransformed
+     {
++        /* Cosmos: NoDockIcon (Mac Driver option). An accessory app can still show and focus its windows (a login or
++         * update dialog keeps working) but has no Dock icon or menu bar of its own. */
++        if (no_dock_icon)
++        {
++            if ([NSApp activationPolicy] == NSApplicationActivationPolicyProhibited)
++                [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
++            if (activateIfTransformed)
++                [self tryToActivateIgnoringOtherApps:YES];
++            return;
++        }
++
+         if ([NSApp activationPolicy] != NSApplicationActivationPolicyRegular)
+         {
+             NSMenu* mainMenu;
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+index 48ca8988..a6ecd631 100644
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -142,6 +142,7 @@
+ extern bool retina_enabled;  /* Whether Retina mode is enabled via registry setting. */
+ extern bool retina_on;       /* Whether Retina mode is currently active (enabled and display is in default mode). */
+ extern bool enable_app_nap;
++extern bool no_dock_icon;
+ 
+ static inline CGRect cgrect_mac_from_win(CGRect rect)
+ {
+diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
+index 514809fd..410cb280 100644
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -55,6 +55,7 @@ bool use_precise_scrolling = true;
+ int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
+ bool retina_enabled = false;
+ bool enable_app_nap = false;
++bool no_dock_icon = false;
+ 
+ pthread_key_t macdrv_thread_data_key = 0;
+ UINT64 app_icon_callback = 0;
+@@ -378,6 +379,11 @@ static void setup_options(void)
+     if (!get_config_key(hkey, appkey, "EnableAppNap", buffer, sizeof(buffer)))
+         enable_app_nap = IS_OPTION_TRUE(buffer[0]);
+ 
++    /* Cosmos: a helper that shows no window of its own (Steam's steam.exe beside steamwebhelper.exe) gets no Dock icon.
++     * @@ Wine registry key: HKCU\Software\Wine\AppDefaults\app.exe\Mac Driver, NoDockIcon */
++    if (!get_config_key(hkey, appkey, "NoDockIcon", buffer, sizeof(buffer)))
++        no_dock_icon = IS_OPTION_TRUE(buffer[0]);
++
+     /* Don't use appkey.  The DPI and monitor sizes should be consistent for all
+        processes in the prefix. */
+     if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))

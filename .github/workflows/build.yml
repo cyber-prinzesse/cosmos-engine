@@ -16,6 +16,14 @@ on:
         description: "Cosmos engine revision (names the tarball cosmos-<wine version>-r<N>; empty keeps Highball's engine-… name)"
         required: false
         default: ""
+      line:
+        description: "Engine line: 11.0 (inputs.json + patches/) or next (Cosmos Next on Wine 11.21: inputs-next.json + patches-next/)"
+        type: choice
+        options: ["11.0", "next"]
+        default: "11.0"
+env:
+  INPUTS: ${{ github.event.inputs.line == 'next' && 'inputs-next.json' || 'inputs.json' }}
+  PATCHES: ${{ github.event.inputs.line == 'next' && 'patches-next' || 'patches' }}
 permissions:
   contents: write   # the optional release step creates a release and uploads the tarball
 jobs:
@@ -32,8 +40,8 @@ jobs:
       - name: pinned source
         run: |
           set -euo pipefail
-          url=$(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["url"])')
-          sha=$(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["sha256"])')
+          url=$(python3 -c 'import json,os;print(json.load(open(os.environ["INPUTS"]))["wine"]["url"])')
+          sha=$(python3 -c 'import json,os;print(json.load(open(os.environ["INPUTS"]))["wine"]["sha256"])')
           curl -sSL -o wine-source.tar.gz "$url"
           echo "$sha  wine-source.tar.gz" | shasum -a 256 -c -
           mkdir -p src && tar -xzf wine-source.tar.gz -C src
@@ -42,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           cd src/sources/wine
-          for p in ../../../patches/*.patch; do [ -e "$p" ] || continue; echo "applying $p"; patch -p1 < "$p"; done
+          for p in ../../../$PATCHES/*.patch; do [ -e "$p" ] || continue; echo "applying $p"; patch -p1 < "$p"; done
       - name: toolchain
         run: |
           set -euo pipefail
@@ -64,7 +72,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/ccache
-          key: ccache-${{ runner.os }}-${{ hashFiles('inputs.json', 'patches/**') }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('inputs.json', 'inputs-next.json', 'patches/**', 'patches-next/**') }}
           restore-keys: ccache-${{ runner.os }}-
       # OpenGL is not passed explicitly: configure then treats the missing EGL headers
       # (there is no EGL on macOS) as a notice, and the Mac driver links OpenGL.framework.
@@ -140,8 +148,8 @@ jobs:
             # the Dock icon of a program without one of its own (patch 0031)
             mkdir -p out/engine/share/wine/cosmos && cp cosmos-theme/exeIcon.icns out/engine/share/wine/cosmos/exeIcon.icns
             { echo "Cosmos engine r$rev, built by run ${{ github.run_id }} from ${{ github.repository }}@${{ github.sha }}"
-              echo "Wine: $(out/engine/bin/wine --version) from $(python3 -c 'import json;print(json.load(open("inputs.json"))["wine"]["url"])')"
-              echo "Patches:"; ls patches/*.patch | sed 's|^patches/|  |'
+              echo "Wine: $(out/engine/bin/wine --version) from $(python3 -c 'import json,os;print(json.load(open(os.environ["INPUTS"]))["wine"]["url"])')"
+              echo "Patches:"; ls $PATCHES/*.patch | sed "s|^$PATCHES/|  |"
               echo "Theme: Cosmos (cosmos-theme/make-theme.py)"; } > out/COSMOS-BUILD.txt
             # the licence (LGPL) and the notices travel inside the tarball, not only beside it on the release page
             cp LICENSE NOTICE.md out/
@@ -167,4 +175,4 @@ jobs:
           set -euo pipefail
           f=$(ls cosmos-*.tar.gz engine-*.tar.gz 2>/dev/null | head -1)
           tag="${f%.tar.gz}"
-          gh release create "$tag" "$f" "$f.sha256" LICENSE NOTICE.md --title "$tag" --notes "Wine from the pinned source (inputs.json) with the patch series in patches/. Built by run ${{ github.run_id }}. Checksum in the .sha256 file."
+          gh release create "$tag" "$f" "$f.sha256" LICENSE NOTICE.md --title "$tag" --notes "Wine from the pinned source ($INPUTS) with the patch series in $PATCHES/. Built by run ${{ github.run_id }}. Checksum in the .sha256 file."

@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 19:27:33 +0100
+Subject: [PATCH 29/29] 0032: Mac Driver QuitRuns (a Mac Quit runs a command
+ instead)
+
+---
+ dlls/winemac.drv/dllmain.c | 35 +++++++++++++++++++++++++++++++++++
+ dlls/winemac.drv/unixlib.h |  1 +
+ dlls/winemac.drv/window.c  |  1 +
+ 3 files changed, 37 insertions(+)
+
+diff --git a/dlls/winemac.drv/dllmain.c b/dlls/winemac.drv/dllmain.c
+index 394bc72b..c885f3cd 100644
+--- a/dlls/winemac.drv/dllmain.c
++++ b/dlls/winemac.drv/dllmain.c
+@@ -195,12 +195,47 @@ static void CALLBACK quit_callback(HWND hwnd, UINT msg, ULONG_PTR data, LRESULT
+ /***********************************************************************
+  *              macdrv_app_quit_request
+  */
++/* Cosmos: Mac Driver QuitRuns. A plain Mac Quit (Dock menu, Cmd-Q) of a program with
++ * HKCU\Software\Wine\AppDefaults\<app.exe>\Mac Driver, QuitRuns = <command line> starts that command instead of
++ * ending this process. Steam's Dock icon belongs to steamwebhelper.exe; quitting it alone made steam.exe start a new
++ * helper at once, so with QuitRuns = "...\steam.exe -shutdown" a Mac Quit quits all of Steam. */
++static BOOL run_quit_command(void)
++{
++    static const WCHAR appdefaults[] = L"Software\\Wine\\AppDefaults\\";
++    static const WCHAR macdriver[] = L"\\Mac Driver";
++    WCHAR exe[MAX_PATH], key[MAX_PATH + 64], cmd[1024], *name;
++    DWORD len = sizeof(cmd);
++    STARTUPINFOW si = {.cb = sizeof(si)};
++    PROCESS_INFORMATION pi;
++
++    if (!GetModuleFileNameW(NULL, exe, ARRAY_SIZE(exe))) return FALSE;
++    name = wcsrchr(exe, '\\') ? wcsrchr(exe, '\\') + 1 : exe;
++    if (wcslen(appdefaults) + wcslen(name) + wcslen(macdriver) >= ARRAY_SIZE(key)) return FALSE;
++    wcscpy(key, appdefaults); wcscat(key, name); wcscat(key, macdriver);
++    if (RegGetValueW(HKEY_CURRENT_USER, key, L"QuitRuns", RRF_RT_REG_SZ, NULL, cmd, &len) || !cmd[0]) return FALSE;
++    if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
++    {
++        WARN("QuitRuns %s failed: %lu\n", debugstr_w(cmd), GetLastError());
++        return FALSE;
++    }
++    TRACE("QuitRuns %s\n", debugstr_w(cmd));
++    CloseHandle(pi.hThread);
++    CloseHandle(pi.hProcess);
++    return TRUE;
++}
++
+ NTSTATUS WINAPI macdrv_app_quit_request(void *arg, ULONG size)
+ {
+     struct app_quit_request_params *params = arg;
+     struct quit_info *qi;
+     UINT i;
+ 
++    if (params->user_quit && run_quit_command())
++    {
++        quit_reply(FALSE);  /* this process stays; the command ends it */
++        return STATUS_SUCCESS;
++    }
++
+     qi = HeapAlloc(GetProcessHeap(), 0, sizeof(*qi));
+     if (!qi)
+         goto fail;
+diff --git a/dlls/winemac.drv/unixlib.h b/dlls/winemac.drv/unixlib.h
+index 425576c5..ce3cbf05 100644
+--- a/dlls/winemac.drv/unixlib.h
++++ b/dlls/winemac.drv/unixlib.h
+@@ -65,6 +65,7 @@
+ {
+     struct dispatch_callback_params dispatch;
+     UINT flags;
++    UINT user_quit;  /* Cosmos: a plain Quit (Dock, Cmd-Q), not logout/restart/shutdown */
+ };
+ 
+ /* macdrv_dnd_query_exited params */
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index 4e8504e6..c0be1f41 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -2621,6 +2621,7 @@ void macdrv_app_quit_requested(const macdrv_event *event)
+ 
+     if (event->app_quit_requested.reason == QUIT_REASON_LOGOUT)
+         params.flags = ENDSESSION_LOGOFF;
++    params.user_quit = event->app_quit_requested.reason == QUIT_REASON_NONE;
+ 
+     KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr, &ret_len);
+ }

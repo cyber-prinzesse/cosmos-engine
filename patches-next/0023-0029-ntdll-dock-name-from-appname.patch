@@ -1,0 +1,211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:07 +0100
+Subject: [PATCH 23/29] 0029-ntdll-dock-name-from-appname
+
+---
+ dlls/ntdll/unix/loader.c  | 48 +++++++++++++++++++++++---
+ dlls/ntdll/unix/process.c | 71 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 114 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 191b3d55..3162c638 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -69,6 +69,7 @@
+ # include <mach/mach.h>
+ # include <mach/mach_error.h>
+ # include <mach-o/getsect.h>
++# include <sys/clonefile.h>
+ # include <servers/bootstrap.h>
+ # include <libkern/OSCacheControl.h>
+ # include "coop_proto.h"
+@@ -508,7 +509,7 @@ static char *extract_exe_name(const char *exe_path)
+         exe_name_len = strlen(exe_name);
+ 
+     if (exe_name_len)
+-        ret = strdup(exe_name);
++        ret = strndup(exe_name, exe_name_len);  /* Cosmos: without the extension, as computed above */
+     else
+         ret = NULL;
+ 
+@@ -576,8 +577,11 @@ static char *create_preloader_link(const char *wineloader_path, const char *exe_
+ 
+     /* Try a hard link first, to avoid the little "alias" arrow that the Dock puts on the icon.
+      * But if that fails, fall back to a symlink.
++     * Cosmos: an APFS clone before either. Hard links are one file under many names, and macOS reports a running
++     * program's path as whichever of those names it looked up last, so every program got one shared, wrong Dock name.
++     * A clone is a file of its own (no extra disk space) and keeps its name.
+      */
+-    if (!link(wineloader_path, linkpath) || !symlink(wineloader_path, linkpath))
++    if (!clonefile(wineloader_path, linkpath, 0) || !link(wineloader_path, linkpath) || !symlink(wineloader_path, linkpath))
+         return linkpath;
+ 
+ fail:
+@@ -585,9 +589,37 @@ fail:
+     return NULL;
+ }
+ 
++/* Cosmos: the name a program shows in the Dock, menu bar and app switcher. WINEMACAPPNAME when it is set: spawn_process
++ * sets it from the program's Mac Driver AppName (or clears it), and whoever starts the first program may set it. Otherwise
++ * the exe name, as before. A '/' or ':' would make a different path or show as '/' in Finder, so they become spaces. */
++static char *get_dock_name(const char *image_path)
++{
++    const char *name = getenv("WINEMACAPPNAME");
++    char *ret, *p;
++
++    if (!name || !*name) return extract_exe_name(image_path);
++    ret = strdup(name);
++    for (p = ret; *p; p++) if (*p == '/' || *p == ':') *p = ' ';
++    return ret;
++}
++
++/* Cosmos: true when the loader has its ntdll.so beside it (lib/wine/<arch>-unix/wine). It then finds ntdll through the
++ * ntdll.so link create_tempdir puts next to the Dock link, so it needs no WINEDLLPATH. */
++static BOOL loader_beside_ntdll(const char *loader)
++{
++    const char *p = strrchr(loader, '/');
++    char *ntdll;
++    BOOL ret;
++
++    if (!p || asprintf(&ntdll, "%.*s/ntdll.so", (int)(p - loader), loader) < 0) return FALSE;
++    ret = !access(ntdll, R_OK);
++    free(ntdll);
++    return ret;
++}
++
+ static void replace_wineloader_path_with_link(char **wineloader_path, const char *image_path)
+ {
+-    char *app_name = extract_exe_name(image_path);
++    char *app_name = get_dock_name(image_path);
+     if (app_name)
+     {
+         char *preloader_path = create_preloader_link(*wineloader_path, app_name);
+@@ -655,9 +687,15 @@ static void preloader_exec( char **argv, const char *image_path, WORD machine )
+      * which will show up as the icon name in the Dock.
+      * When the preloader is not being used, WINEDLLPATH needs to be set correctly for
+      * the loader to find ntdll.so, so don't even attempt this unless WINEDLLPATH is set.
++     * Cosmos: or unless the loader sits beside its ntdll.so. On the first start image_path is the wine binary itself,
++     * so the program named on the command line (argv[2]) gives the name.
+      */
+-    if (getenv("WINEDLLPATH"))
+-        replace_wineloader_path_with_link( &(argv[1]), image_path );
++    if (getenv("WINEDLLPATH") || loader_beside_ntdll( argv[1] ))
++    {
++        const char *base = strrchr( image_path, '/' );
++        base = base ? base + 1 : image_path;
++        replace_wineloader_path_with_link( &(argv[1]), !strcmp( base, "wine" ) && argv[2] ? argv[2] : image_path );
++    }
+ #endif
+ 
+     /* CW HACK: if ROSETTA_X87_PATH is set, re-exec via rosettax87 so its x87 JIT
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index eeba7343..e6119298 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -869,6 +869,62 @@ static BOOL is_unix_console_handle( HANDLE handle )
+ /***********************************************************************
+  *           spawn_process
+  */
++#ifdef __APPLE__
++/***********************************************************************
++ *           get_mac_app_name
++ *
++ * Cosmos: the name macOS should show for a new process (Dock, menu bar, app switcher), from
++ * HKCU\Software\Wine\AppDefaults\<app.exe>\Mac Driver, AppName. Read in the parent: the forked child must not talk to
++ * the server. The child passes it to the loader as WINEMACAPPNAME, which names the Dock link after it (loader.c).
++ */
++static char *get_mac_app_name( const UNICODE_STRING *image )
++{
++    static const WCHAR macdrvW[] = {'\\','M','a','c',' ','D','r','i','v','e','r',0};
++    static const WCHAR appnameW[] = {'A','p','p','N','a','m','e',0};
++    char buffer[offsetof( KEY_VALUE_PARTIAL_INFORMATION, Data[256 * sizeof(WCHAR)] )];
++    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)buffer;
++    const WCHAR *exe = image->Buffer;
++    DWORD exe_len = image->Length / sizeof(WCHAR), i, size, len;
++    UNICODE_STRING nameW;
++    OBJECT_ATTRIBUTES attr;
++    HANDLE root, key;
++    WCHAR *path;
++    char *ret = NULL;
++    int n;
++
++    for (i = exe_len; i; i--) if (exe[i - 1] == '\\' || exe[i - 1] == '/') break;
++    exe += i;
++    exe_len -= i;
++    if (!exe_len || open_hkcu_key( "Software\\Wine\\AppDefaults", &root )) return NULL;
++    if (!(path = malloc( exe_len * sizeof(WCHAR) + sizeof(macdrvW) ))) { NtClose( root ); return NULL; }
++    memcpy( path, exe, exe_len * sizeof(WCHAR) );
++    memcpy( path + exe_len, macdrvW, sizeof(macdrvW) );
++    init_unicode_string( &nameW, path );
++    InitializeObjectAttributes( &attr, &nameW, OBJ_CASE_INSENSITIVE, root, NULL );
++    /* @@ Wine registry key: HKCU\Software\Wine\AppDefaults\app.exe\Mac Driver */
++    if (!NtOpenKey( &key, KEY_QUERY_VALUE, &attr ))
++    {
++        init_unicode_string( &nameW, appnameW );
++        if (!NtQueryValueKey( key, &nameW, KeyValuePartialInformation, buffer, sizeof(buffer), &size ) &&
++            info->Type == REG_SZ && (len = info->DataLength / sizeof(WCHAR)))
++        {
++            const WCHAR *val = (const WCHAR *)info->Data;
++            while (len && !val[len - 1]) len--;
++            if (len && (ret = malloc( len * 3 + 1 )))
++            {
++                n = ntdll_wcstoumbs( val, len, ret, len * 3, FALSE );
++                ret[n > 0 ? n : 0] = 0;
++                if (!*ret) { free( ret ); ret = NULL; }
++            }
++        }
++        NtClose( key );
++    }
++    free( path );
++    NtClose( root );
++    return ret;
++}
++#endif
++
+ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int socketfd,
+                                int unixdir, char *winedebug, const struct pe_image_info *pe_info )
+ {
+@@ -878,6 +934,9 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
+     char **argv;
+     char *image_path_name_a;
+     int image_path_name_len;
++#ifdef __APPLE__
++    char *mac_app_name = NULL;
++#endif
+ 
+     if (wine_server_handle_to_fd( params->hStdInput, FILE_READ_DATA, &stdin_fd, NULL ) &&
+         isatty(0) && is_unix_console_handle( params->hStdInput ))
+@@ -892,6 +951,10 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
+                           winedebug, pe_info))
+         goto done;
+ 
++#ifdef __APPLE__
++    mac_app_name = get_mac_app_name( &params->ImagePathName );
++#endif
++
+     if (!(pid = fork()))  /* child */
+     {
+         if (!(pid = fork()))  /* grandchild */
+@@ -963,6 +1026,11 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
+                 }
+             }
+ 
++#ifdef __APPLE__
++            /* Cosmos: this program's own name, never the one its parent was started with */
++            if (mac_app_name) setenv( "WINEMACAPPNAME", mac_app_name, 1 );
++            else unsetenv( "WINEMACAPPNAME" );
++#endif
+             exec_wineloader( argv, socketfd, pe_info, image_path_name_a );
+             _exit(1);
+         }
+@@ -979,6 +1047,9 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
+         } while (wret < 0 && errno == EINTR);
+     }
+     else status = STATUS_NO_MEMORY;
++#ifdef __APPLE__
++    free( mac_app_name );
++#endif
+ 
+ done: /* CrossOver Hack 10523 */
+     if (stdin_fd != -1 && stdin_fd != 0) close( stdin_fd );

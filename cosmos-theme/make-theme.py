@@ -96,6 +96,8 @@ def main():
         sys.exit(__doc__)
     wine = os.path.abspath(sys.argv[1])
     d = os.path.join(wine, "dlls", "light.msstyles")
+    if not os.path.isdir(d):   # Wine 11.21 renamed the light style to aero.msstyles (Cosmos Next)
+        d = os.path.join(wine, "dlls", "aero.msstyles")
     svgs = sorted(f for f in os.listdir(d) if f.endswith(".svg"))
     for f in svgs:
         p = os.path.join(d, f)
@@ -103,12 +105,12 @@ def main():
             t = fh.read()
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(recolour_svg(t))
-    rc = os.path.join(d, "light.rc")
+    rc = os.path.join(d, os.path.basename(d).replace(".msstyles", ".rc"))   # light.rc, or aero.rc on 11.21
     with open(rc, encoding="utf-8") as fh:
         t = fh.read()
     with open(rc, "w", encoding="utf-8") as fh:
         fh.write(recolour_rc(t))
-    print("cosmos theme: %d SVGs and light.rc recoloured" % len(svgs))
+    print("cosmos theme: %d SVGs and %s recoloured" % (len(svgs), os.path.basename(rc)))
     if "--no-bitmaps" in sys.argv:
         return
     env = dict(os.environ)

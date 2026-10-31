@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:05 +0100
+Subject: [PATCH 06/29] 0008-macos-mirror-teb-fiberdata
+
+---
+ dlls/kernelbase/thread.c | 26 +++++++++++++++++++++++---
+ 1 file changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/kernelbase/thread.c b/dlls/kernelbase/thread.c
+index a80a51fe..7ca97779 100644
+--- a/dlls/kernelbase/thread.c
++++ b/dlls/kernelbase/thread.c
+@@ -1119,6 +1119,26 @@ LPVOID WINAPI DECLSPEC_HOTPATCH CreateFiberEx( SIZE_T stack_commit, SIZE_T stack
+ }
+ 
+ 
++/* On macOS the %gs base is the host thread block, not the TEB, so signal_init_process()
++ * mirrors individual TEB fields into it. Tib.FiberData was never mirrored, but
++ * GetCurrentFiber() is an intrinsic that reads %gs:0x20 directly and cannot be intercepted,
++ * so a game's job system reads a host value and hands it back to SwitchToFiber, which
++ * dereferences it (Marvel's Guardians of the Galaxy: read of 0x907, i.e. 0x8ff + 8).
++ * Keep the mirror in step wherever Tib.FiberData changes.
++ *
++ * On macOS this slot holds the thread's pthread QoS class, which is lost for threads that
++ * use fibers. Windows and macOS both fix the offset, so the two cannot coexist. Not guarded
++ * on __APPLE__: this file is built for PE by mingw, where that macro is never defined. Where
++ * %gs maps to the TEB the store writes the same address as the assignment above it. */
++static inline void set_teb_fiber_data( void *fiber )
++{
++    NtCurrentTeb()->Tib.FiberData = fiber;
++#ifdef __x86_64__
++    __asm__ volatile ("movq %0,%%gs:%c1" :: "r" (fiber), "n" (FIELD_OFFSET(TEB, Tib.FiberData)));
++#endif
++}
++
++
+ /***********************************************************************
+  *           ConvertFiberToThread   (kernelbase.@)
+  */
+@@ -1132,7 +1152,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertFiberToThread(void)
+         return FALSE;
+     }
+     relocate_thread_actctx_stack( &NtCurrentTeb()->ActivationContextStack );
+-    NtCurrentTeb()->Tib.FiberData = NULL;
++    set_teb_fiber_data( NULL );
+     NtCurrentTeb()->HasFiberData = FALSE;
+     HeapFree( GetProcessHeap(), 0, fiber );
+     return TRUE;
+@@ -1194,7 +1214,7 @@ LPVOID WINAPI DECLSPEC_HOTPATCH ConvertThreadToFiberEx( LPVOID param, DWORD flag
+     fiber->flags            = flags;
+     fiber->fls_slots        = NtCurrentTeb()->FlsSlots;
+     relocate_thread_actctx_stack( &fiber->actctx.stack_space );
+-    NtCurrentTeb()->Tib.FiberData = fiber;
++    set_teb_fiber_data( fiber );
+     NtCurrentTeb()->HasFiberData = TRUE;
+     return fiber;
+ }
+@@ -1245,7 +1265,7 @@ void WINAPI DECLSPEC_HOTPATCH SwitchToFiber( LPVOID fiber )
+     /* stack_allocation and stack_base never change */
+ 
+     /* FIXME: should save floating point context if requested in fiber->flags */
+-    NtCurrentTeb()->Tib.FiberData     = new_fiber;
++    set_teb_fiber_data( new_fiber );
+     NtCurrentTeb()->Tib.ExceptionList = new_fiber->except;
+     NtCurrentTeb()->Tib.StackBase     = new_fiber->stack_base;
+     NtCurrentTeb()->Tib.StackLimit    = new_fiber->stack_limit;

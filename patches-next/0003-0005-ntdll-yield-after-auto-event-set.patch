@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:04 +0100
+Subject: [PATCH 03/29] 0005-ntdll-yield-after-auto-event-set
+
+---
+ dlls/ntdll/unix/msync.c | 9 +++++++++
+ dlls/ntdll/unix/sync.c  | 9 ++++++++-
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
+index ae46bf3b..5817861d 100644
+--- a/dlls/ntdll/unix/msync.c
++++ b/dlls/ntdll/unix/msync.c
+@@ -700,7 +700,16 @@ NTSTATUS msync_set_event_obj( int obj, LONG *prev_state )
+     LONG current;
+ 
+     if (!(current = __atomic_exchange_n( &event->signaled, 1, __ATOMIC_SEQ_CST )))
++    {
+         signal_all( (void *)event, obj );
++        /* Highball: Windows boosts the thread woken by an auto-reset event so it usually runs
++         * before the setter continues. Without that, a setter that signals twice in a row
++         * before the waiter is scheduled loses the second wake-up (the event is already
++         * signaled) and a job hand-off that relies on one wake per signal deadlocks. Seen in
++         * CS:GO's map load on macOS 26 under Rosetta. Yield after the transition so the
++         * waiter gets the CPU first. */
++        if (event->msync_type == MSYNC_AUTO_EVENT) sched_yield();
++    }
+ 
+     if (prev_state) *prev_state = current;
+ 
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 02faa133..c342e768 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -1270,7 +1270,14 @@ NTSTATUS WINAPI GPT_IMPORT(NtSetEvent)( HANDLE handle, LONG *prev_state )
+         req->handle = wine_server_obj_handle( handle );
+         req->op     = SET_EVENT;
+         ret = wine_server_call( req );
+-        if (!ret && prev_state) *prev_state = reply->state;
++        if (!ret)
++        {
++            if (prev_state) *prev_state = reply->state;
++            /* Highball: let a thread the server just woke run before we signal again
++             * (see msync_set_event_obj); the server does not tell us the event type, and
++             * the yield is cheap, so it applies to every 0->1 transition here. */
++            if (!reply->state) sched_yield();
++        }
+     }
+     SERVER_END_REQ;
+     return ret;

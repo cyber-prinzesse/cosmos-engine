@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:06 +0100
+Subject: [PATCH 12/29] 0014-msync-unregister-early-return
+
+---
+ dlls/ntdll/unix/msync.c | 17 ++++++++---------
+ server/msync.c          | 10 ++++++++--
+ 2 files changed, 16 insertions(+), 11 deletions(-)
+
+diff --git a/dlls/ntdll/unix/msync.c b/dlls/ntdll/unix/msync.c
+index 5817861d..f8f3a010 100644
+--- a/dlls/ntdll/unix/msync.c
++++ b/dlls/ntdll/unix/msync.c
+@@ -377,15 +377,14 @@ static NTSTATUS msync_wait_multiple( const int *objs, void **objs_shm, int alert
+     {
+         if (check_shm_contention( objs_shm, alert_obj_shm, count, tid ))
+         {
+-            int i;
+-            for (i = 0; i < count; i++)
+-            {
+-                struct event *obj = (struct event *)objs_shm[i];
+-
+-                int refs = __atomic_sub_fetch( &obj->multiple_waiters, 1, __ATOMIC_SEQ_CST);
+-                if (refs < 0)
+-                    __atomic_store_n( &obj->multiple_waiters, 0, __ATOMIC_SEQ_CST);
+-            }
++            /* The server still gets the registration sent above and, if nothing it waits
++             * for is signaled by then, keeps this thread on every object's list. Nothing
++             * took it off again, so each lost race leaked list nodes in the wineserver
++             * without bound (pool exhausted, then malloc per wait, gigabytes after hours
++             * of a game that waits on several objects in a hot loop). Unregister like
++             * every other exit does; this also drops the alert object's waiter count,
++             * which the loop here used to leave raised. */
++            server_remove_wait( msgh_id, objs, objs_shm, alert_obj, alert_obj_shm, count );
+             return STATUS_PENDING;
+         }
+     }
+diff --git a/server/msync.c b/server/msync.c
+index eecf9b37..01cbb398 100644
+--- a/server/msync.c
++++ b/server/msync.c
+@@ -177,7 +177,13 @@ static inline struct tid_node *pool_alloc(void)
+ {
+     if (pool->count == 0)
+     {
+-        fprintf( stderr, "msync: warn: node memory pool exhausted\n" );
++        static int warned;
++        /* Once: it used to print on every allocation past the pool, millions of lines. */
++        if (!warned)
++        {
++            warned = 1;
++            fprintf( stderr, "msync: warn: node memory pool exhausted\n" );
++        }
+         return malloc( sizeof(struct tid_node) );
+     }
+     return pool->free_nodes[--pool->count];
+@@ -508,7 +514,7 @@ static void *mach_message_pump( void *args )
+             val = __atomic_load_n( &obj->low, __ATOMIC_SEQ_CST );
+             if ((is_mutex && (val == 0 || val == ~0 || val == tid)) || (!is_mutex && val != 0))
+             {
+-                if (i > 1) unregister_wait( &receive_message, tid, i );
++                if (i > 0) unregister_wait( &receive_message, tid, i );  /* objects 0..i-1 were added above */
+                 wake_tid( tid );
+                 break;
+             }

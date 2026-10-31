@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:07 +0100
+Subject: [PATCH 21/29] 0027-ntdll-dll-redirection-dotlocal-folder
+
+---
+ dlls/ntdll/loader.c | 45 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 44 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index ceda99cd..a6d8a980 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3893,6 +3893,44 @@ done:
+     return status;
+ }
+ 
++/***********************************************************************
++ *	get_dotlocal_dir
++ *
++ * The folder of the main exe's DLL redirection: a directory named like the
++ * exe with ".local" appended, next to it. Windows looks there first for a DLL
++ * loaded by name, and Wine's loader never did, so a game shipping its DLLs
++ * that way stopped before its first window with every one of them "not
++ * found" (Fahrenheit: Indigo Prophecy Remastered, Fahrenheit.exe.local).
++ * Checked once, under the loader lock.
++ */
++static const WCHAR *get_dotlocal_dir(void)
++{
++    static BOOL checked;
++    static WCHAR *dotlocal_dir;
++    const UNICODE_STRING *image = &NtCurrentTeb()->Peb->ProcessParameters->ImagePathName;
++    FILE_BASIC_INFORMATION info;
++    OBJECT_ATTRIBUTES attr;
++    UNICODE_STRING nt_name;
++    WCHAR *dir;
++
++    if (checked) return dotlocal_dir;
++    checked = TRUE;
++    if (!image->Buffer || !image->Length) return NULL;
++    if (!(dir = RtlAllocateHeap( GetProcessHeap(), 0, image->Length + sizeof(L".local") ))) return NULL;
++    memcpy( dir, image->Buffer, image->Length );
++    wcscpy( dir + image->Length / sizeof(WCHAR), L".local" );
++    if (!RtlDosPathNameToNtPathName_U_WithStatus( dir, &nt_name, NULL, NULL ))
++    {
++        InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
++        if (!NtQueryAttributesFile( &attr, &info ) && (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
++            dotlocal_dir = dir;
++        RtlFreeUnicodeString( &nt_name );
++    }
++    if (dotlocal_dir) TRACE( "DLL redirection folder %s\n", debugstr_w(dotlocal_dir) );
++    else RtlFreeHeap( GetProcessHeap(), 0, dir );
++    return dotlocal_dir;
++}
++
+ /***********************************************************************
+  *	find_dll_file
+  *
+@@ -3944,7 +3982,12 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
+ 
+     if (RtlDetermineDosPathNameType_U( libname ) == RtlPathTypeRelative)
+     {
+-        status = search_dll_file( load_path, libname, nt_name, pwm, mapping, image_info, id );
++        const WCHAR *dotlocal = get_dotlocal_dir();
++
++        status = STATUS_DLL_NOT_FOUND;
++        if (dotlocal) status = search_dll_file( dotlocal, libname, nt_name, pwm, mapping, image_info, id );
++        if (status == STATUS_DLL_NOT_FOUND || status == STATUS_NOT_SUPPORTED)
++            status = search_dll_file( load_path, libname, nt_name, pwm, mapping, image_info, id );
+         switch (status)
+         {
+         case STATUS_NOT_SUPPORTED:

@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:06 +0100
+Subject: [PATCH 14/29] 0016-macos-lasterror-callback-return-once
+
+---
+ dlls/ntdll/unix/signal_x86_64.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index 51a5797e..628e7842 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -1690,10 +1690,6 @@ extern void DECLSPEC_NORETURN user_mode_callback_return( void *ret_ptr, ULONG re
+                                                          NTSTATUS status, TEB *teb );
+ __ASM_GLOBAL_FUNC( user_mode_callback_return,
+ #ifdef __APPLE__
+-                   "movl %gs:0x68,%r10d\n\t"       /* PE's LastErrorValue back into the TEB */
+-                   "movl %r10d,0x68(%rcx)\n\t"
+-                   "movq 0x350(%rcx),%r10\n\t"     /* host slot 13 back: unix code owns %gs:0x68 again */
+-                   "movq %r10,%gs:0x68\n\t"
+                    "movq 0x348(%rcx),%r10\n\t" /* amd64_thread_data()->host_qos: unix code owns %gs:0x20 again */
+                    "movq %r10,%gs:0x20\n\t"
+ #endif

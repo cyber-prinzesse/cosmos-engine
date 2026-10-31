@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrii Rozhanskyi <andrey.rozhanskiy@icloud.com>
+Date: Sat, 31 Oct 2026 10:51:05 +0100
+Subject: [PATCH 09/29] 0011-macos-lasterror-in-gs-slot
+
+---
+ dlls/kernelbase/thread.c        |  2 +-
+ dlls/ntdll/error.c              | 14 +++++++++++++-
+ dlls/ntdll/unix/signal_x86_64.c | 34 ++++++++++++++++++++++++++++++++-
+ include/winbase.h               | 12 ++++++++++++
+ 4 files changed, 59 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/kernelbase/thread.c b/dlls/kernelbase/thread.c
+index 7ca97779..5327884c 100644
+--- a/dlls/kernelbase/thread.c
++++ b/dlls/kernelbase/thread.c
+@@ -230,7 +230,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetExitCodeThread( HANDLE thread, LPDWORD exit_cod
+  */
+ DWORD WINAPI kernelbase_GetLastError(void)
+ {
+-    return NtCurrentTeb()->LastErrorValue;
++    return RtlGetLastWin32Error();   /* reads %gs:0x68 on x86_64, see ntdll/error.c */
+ }
+ 
+ 
+diff --git a/dlls/ntdll/error.c b/dlls/ntdll/error.c
+index 1dd48450..df8634c7 100644
+--- a/dlls/ntdll/error.c
++++ b/dlls/ntdll/error.c
+@@ -103,7 +103,16 @@ NTSTATUS WINAPI RtlGetLastNtStatus(void)
+  */
+ DWORD WINAPI RtlGetLastWin32Error(void)
+ {
++#ifdef __x86_64__
++    /* Read the value where MSVC-built code reads it (%gs:0x68). On Linux that is the TEB field
++     * itself; on macOS it is the slot the unix side hands to PE code as LastErrorValue
++     * (signal_x86_64.c), kept in step with the TEB at every PE/unix crossing. */
++    DWORD err;
++    __asm__ volatile( "movl %%gs:0x68,%0" : "=r" (err) );
++    return err;
++#else
+     return NtCurrentTeb()->LastErrorValue;
++#endif
+ }
+ 
+ /***********************************************************************
+@@ -121,6 +130,9 @@ DWORD WINAPI RtlGetLastWin32Error(void)
+ void WINAPI RtlSetLastWin32Error( DWORD err )
+ {
+     NtCurrentTeb()->LastErrorValue = err;
++#ifdef __x86_64__
++    __asm__ volatile( "movl %0,%%gs:0x68" :: "r" (err) );   /* see RtlGetLastWin32Error */
++#endif
+ }
+ 
+ /***********************************************************************
+@@ -136,5 +148,5 @@ void WINAPI RtlSetLastWin32Error( DWORD err )
+  */
+ void WINAPI RtlSetLastWin32ErrorAndNtStatusFromNtStatus( NTSTATUS status )
+ {
+-    NtCurrentTeb()->LastErrorValue = RtlNtStatusToDosError( status );
++    RtlSetLastWin32Error( RtlNtStatusToDosError( status ) );
+ }
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index a3f8b576..51a5797e 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -478,12 +478,14 @@ struct amd64_thread_data
+     DWORD                 mxcsr;         /* 033c Unix-side mxcsr register */
+     char                  syscall_dispatch; /* 0340 */
+     DWORD_PTR             host_qos;      /* 0348 macOS: the pthread QoS slot value, %gs:0x20, while PE code owns that slot */
++    DWORD_PTR             host_slot13;   /* 0350 macOS: the pthread TSD slot 13 (libc gmtime key), %gs:0x68, while PE code owns it as LastErrorValue */
+ };
+ 
+ C_ASSERT( sizeof(struct amd64_thread_data) <= sizeof(((struct teb_data *)0)->cpu_data) );
+ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, pthread_teb ) == 0x320 );
+ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, frame_size ) == 0x328 );
+ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, host_qos ) == 0x348 );
++C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, host_slot13 ) == 0x350 );
+ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, instrumentation_callback ) == 0x330 );
+ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, fs ) == 0x338 );
+ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, mxcsr ) == 0x33c );
+@@ -1666,6 +1668,10 @@ __ASM_GLOBAL_FUNC( call_user_mode_callback,
+                    "xchgq %rcx,%r10\n"
+                    "1:\n\t"
+ #ifdef __APPLE__
++                   "movq %gs:0x68,%rax\n\t"        /* host slot 13 (libc gmtime key) aside; PE code owns %gs:0x68 as LastErrorValue */
++                   "movq %rax,0x350(%r13)\n\t"
++                   "movl 0x68(%r13),%eax\n\t"      /* teb->LastErrorValue, zero-extended */
++                   "movq %rax,%gs:0x68\n\t"
+                    "movq 0x20(%r13),%rax\n\t"      /* teb->Tib.FiberData: PE code owns %gs:0x20 from here */
+                    "movq %rax,%gs:0x20\n\t"
+ #endif
+@@ -1684,6 +1690,10 @@ extern void DECLSPEC_NORETURN user_mode_callback_return( void *ret_ptr, ULONG re
+                                                          NTSTATUS status, TEB *teb );
+ __ASM_GLOBAL_FUNC( user_mode_callback_return,
+ #ifdef __APPLE__
++                   "movl %gs:0x68,%r10d\n\t"       /* PE's LastErrorValue back into the TEB */
++                   "movl %r10d,0x68(%rcx)\n\t"
++                   "movq 0x350(%rcx),%r10\n\t"     /* host slot 13 back: unix code owns %gs:0x68 again */
++                   "movq %r10,%gs:0x68\n\t"
+                    "movq 0x348(%rcx),%r10\n\t" /* amd64_thread_data()->host_qos: unix code owns %gs:0x20 again */
+                    "movq %r10,%gs:0x20\n\t"
+ #endif
+@@ -3055,6 +3065,12 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+      * on entry (the dispatchers, user_mode_callback_return), PE code gets Tib.FiberData on
+      * return (__wine_syscall_dispatcher_return, call_user_mode_callback). Keep the host value. */
+     __asm__ volatile ("movq %%gs:%c1,%0" : "=r" (thread_data->host_qos) : "n" (FIELD_OFFSET(TEB, Tib.FiberData)));
++    /* %gs:0x68 is where MSVC-built code reads LastErrorValue directly (Unity's Mono runtime reads it
++     * at 130 sites: File.Delete of a missing file threw "Unknown error (0x80f13910)", The Last
++     * Flame, 2026-09-20). On macOS that is pthread TSD slot 13, libc's gmtime key, so it is
++     * swapped at the same crossings as the QoS slot: PE code sees the TEB's LastErrorValue, and
++     * its value is written back to the TEB on every entry to unix code. Keep the host value. */
++    __asm__ volatile ("movq %%gs:%c1,%0" : "=r" (thread_data->host_slot13) : "n" (FIELD_OFFSET(TEB, LastErrorValue)));
+     thread_data->pthread_teb = mac_thread_gsbase();
+     /* alloc_tls_slot() needs to poke a value to an address relative to each
+        thread's gsbase.  Have each thread record its gsbase pointer into its
+@@ -3207,6 +3223,10 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
+                    "movq %gs:0x30,%r13\n\t"        /* teb */
+                    "movl %eax,0xb0(%rcx)\n\t"      /* frame->syscall_id */
+ #ifdef __APPLE__
++                   "movl %gs:0x68,%r15d\n\t"       /* PE's LastErrorValue back into the TEB */
++                   "movl %r15d,0x68(%r13)\n\t"
++                   "movq 0x350(%r13),%r15\n\t"     /* amd64_thread_data()->host_slot13 */
++                   "movq %r15,%gs:0x68\n\t"        /* unix code sees libc's slot 13 again */
+                    "movq 0x348(%r13),%r15\n\t"     /* amd64_thread_data()->host_qos */
+                    "movq %r15,%gs:0x20\n\t"        /* unix code sees the pthread QoS slot again */
+ #endif
+@@ -3343,6 +3363,10 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
+                    "leaq 0x70(%rcx),%rsp\n\t"      /* %rsp > frame means no longer inside syscall */
+ #ifdef __APPLE__
+                    "movq %gs:0x30,%r15\n\t"        /* teb */
++                   "movq %gs:0x68,%rdx\n\t"        /* host slot 13 aside (%rdx is scratch until the restore below) */
++                   "movq %rdx,0x350(%r15)\n\t"
++                   "movl 0x68(%r15),%edx\n\t"      /* teb->LastErrorValue: PE code owns %gs:0x68 again */
++                   "movq %rdx,%gs:0x68\n\t"
+                    "movq 0x20(%r15),%r15\n\t"      /* teb->Tib.FiberData */
+                    "movq %r15,%gs:0x20\n\t"        /* PE code reads GetCurrentFiber() here; %r15 is restored below */
+ #endif
+@@ -3564,7 +3588,11 @@ __ASM_GLOBAL_FUNC( __wine_unix_call_dispatcher,
+                    __ASM_CFI_REG_IS_AT2(rbp, rcx, 0x98, 0x01)
+                    "movq %gs:0x30,%r13\n\t"
+ #ifdef __APPLE__
+-                   "movq 0x348(%r13),%rax\n\t"     /* amd64_thread_data()->host_qos; %rax is dead until the call below */
++                   "movl %gs:0x68,%eax\n\t"        /* PE's LastErrorValue back into the TEB; %rax is dead until the call below */
++                   "movl %eax,0x68(%r13)\n\t"
++                   "movq 0x350(%r13),%rax\n\t"     /* amd64_thread_data()->host_slot13 */
++                   "movq %rax,%gs:0x68\n\t"        /* unix code sees libc's slot 13 again */
++                   "movq 0x348(%r13),%rax\n\t"     /* amd64_thread_data()->host_qos */
+                    "movq %rax,%gs:0x20\n\t"        /* unix code sees the pthread QoS slot again */
+ #endif
+                    "stmxcsr 0xd8(%rcx)\n\t"        /* frame->xsave.MxCsr */
+@@ -3661,6 +3689,10 @@ __ASM_GLOBAL_FUNC( __wine_unix_call_dispatcher,
+                    "1:\n\t"
+ #endif
+ #ifdef __APPLE__
++                   "movq %gs:0x68,%rdx\n\t"        /* host slot 13 aside (%rdx is volatile for the PE caller) */
++                   "movq %rdx,0x350(%r13)\n\t"
++                   "movl 0x68(%r13),%edx\n\t"      /* teb->LastErrorValue: PE code owns %gs:0x68 again */
++                   "movq %rdx,%gs:0x68\n\t"
+                    "movq 0x20(%r13),%rdx\n\t"      /* teb->Tib.FiberData: PE code owns %gs:0x20 again (%rdx is volatile for the PE caller) */
+                    "movq %rdx,%gs:0x20\n\t"
+ #endif
+diff --git a/include/winbase.h b/include/winbase.h
+index 749e5aab..9960ea95 100644
+--- a/include/winbase.h
++++ b/include/winbase.h
+@@ -2705,7 +2705,16 @@ extern WCHAR * CDECL wine_get_dos_file_name( const char * ) __WINE_DEALLOC(HeapF
+ 
+ static FORCEINLINE DWORD WINAPI GetLastError(void)
+ {
++#if defined(__x86_64__) && defined(__GNUC__) && !defined(__arm64ec__) && !defined(WINE_UNIX_LIB)
++    /* Read the value where MSVC-built code reads it (%gs:0x68). On Linux that is the TEB field
++     * itself; on macOS the unix side hands PE code that slot as LastErrorValue and keeps it in
++     * step with the TEB at every crossing (ntdll/unix/signal_x86_64.c). */
++    DWORD err;
++    __asm__ volatile( "movl %%gs:0x68,%0" : "=r" (err) );
++    return err;
++#else
+     return *(DWORD *)((void **)NtCurrentTeb() + 13);
++#endif
+ }
+ 
+ static FORCEINLINE HANDLE WINAPI GetProcessHeap(void)
+@@ -2716,6 +2725,9 @@ static FORCEINLINE HANDLE WINAPI GetProcessHeap(void)
+ static FORCEINLINE void WINAPI SetLastError( DWORD err )
+ {
+     *(DWORD *)((void **)NtCurrentTeb() + 13) = err;
++#if defined(__x86_64__) && defined(__GNUC__) && !defined(__arm64ec__) && !defined(WINE_UNIX_LIB)
++    __asm__ volatile( "movl %0,%%gs:0x68" :: "r" (err) );   /* see GetLastError() above */
++#endif
+ }
+ 
+ #else  /* __WINESRC__ */
